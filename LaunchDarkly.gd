@@ -3,16 +3,16 @@
 
 extends Node
 
-const version = "0.0.4"
+const version = "0.0.5"
+
+const stream_path = "/meval/"
 
 signal feature_store_updated
 
 var featureStore = {}
 
-var config = {
-	"stream_uri":"clientstream.launchdarkly.com",
-	"dev_stream_path":"/meval/"
-}
+var stream_uri = "clientstream.launchdarkly.com"
+
 var mobileKey = null
 var userObject = null
 
@@ -25,6 +25,10 @@ var response_body = PoolByteArray()
 var stream_event_name = null
 var stream_event_data = null
 
+###############################################################################
+#### LD public methods
+###############################################################################
+
 func configure(newMobileKey):
 	if mobileKey == newMobileKey:
 		return
@@ -33,9 +37,9 @@ func configure(newMobileKey):
 	shouldRestartStream = true
 
 func identify(newUserObject):
-	if !areUsersDifferent(userObject, newUserObject):
+	if !_areUsersDifferent(userObject, newUserObject):
 		return
-	userObject = deepCopy(newUserObject)
+	userObject = _deepCopy(newUserObject)
 	isIdentified = true
 	shouldRestartStream = true
 
@@ -45,10 +49,10 @@ func variation(flagKey, fallbackValue):
 	return featureStore[flagKey].value
 
 ###############################################################################
-#### LD util
+#### LD private methods
 ###############################################################################
 
-func areUsersDifferent(userA, userB):
+func _areUsersDifferent(userA, userB):
 	return !_deepEqual(userA, userB)
 
 ###############################################################################
@@ -56,12 +60,13 @@ func areUsersDifferent(userA, userB):
 ###############################################################################
 
 func _process(delta):
-	var domain = config.stream_uri
 	var port = 443
 	var use_ssl = true
 	var verify_host = false
-	var url_after_domain = config.dev_stream_path
-		
+
+	var domain = stream_uri
+	var url_after_domain = stream_path
+	
 	httpclient.poll()
 	var httpclient_status = httpclient.get_status()
 	
@@ -142,16 +147,16 @@ func _ready():
 	print("LaunchDarkly Godot SDK " + version)
 
 ###############################################################################
-#### Util
+#### Utility methods
 ###############################################################################
 
-func deepCopy(v):
+func _deepCopy(v):
 	if !_isObject(v):
 		return v
 	
 	var newCopy = {}
 	for key in v:
-		newCopy[key] = deepCopy(v[key])
+		newCopy[key] = _deepCopy(v[key])
 	
 	return newCopy
 
