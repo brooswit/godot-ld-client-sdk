@@ -3,7 +3,7 @@
 
 extends Node
 
-const version = "0.0.3"
+const version = "0.0.4"
 
 signal feature_store_updated
 
@@ -61,9 +61,7 @@ func _process(delta):
 	var use_ssl = true
 	var verify_host = false
 	var url_after_domain = config.dev_stream_path
-	
-	var user_base64 = Marshalls.utf8_to_base64( JSON.print(userObject) )
-	
+		
 	httpclient.poll()
 	var httpclient_status = httpclient.get_status()
 	
@@ -102,6 +100,7 @@ func _process(delta):
 		
 	if httpclient_status == HTTPClient.STATUS_CONNECTED:
 		if isIdentified:
+			var user_base64 = Marshalls.utf8_to_base64( JSON.print(userObject) )
 			var additional_headers = ["Authorization: " + mobileKey]
 			var err = httpclient.request(HTTPClient.METHOD_GET, url_after_domain + user_base64, additional_headers)
 			if err != OK:
