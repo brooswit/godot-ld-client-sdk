@@ -24,7 +24,9 @@ Check out our [documentation](https://docs.launchdarkly.com) for in-depth instru
 
 ## Contributing
 
-We encourage pull requests and other contributions from the community. Check out our [contributing guidelines](CONTRIBUTING.md) for instructions on how to contribute to this SDK.
+This project is not feature complete. You can evaluate flags, but that is about it. My goal is to achieve full feature parity eventually, but this is a personal project and it will take time.
+
+I encourage pull requests and other contributions from the community. Check out our [contributing guidelines](CONTRIBUTING.md) for instructions on how to contribute to this SDK.
 
 ## About LaunchDarkly
 
