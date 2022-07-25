@@ -1,6 +1,10 @@
 # Unofficial LaunchDarkly SDK for Godot
 
-This readme was adapted from readmes for official LaunchDarkly SDKs. This is not a supported LaunchDarkly product. Do not reach out to LaunchDarkly support for help.
+This readme was adapted from readmes for official LaunchDarkly SDKs. 
+
+The LaunchDarkly Client-Side SDK for Godot is designed primarily for use by code that is deployed to an end user, such as in a desktop application or a smart device. It follows the client-side LaunchDarkly model for single-user contexts (much like our mobile or JavaScript SDKs). It is not intended for use in multi-user systems such as web servers and applications.
+
+This is not a supported LaunchDarkly product. Do not reach out to LaunchDarkly support for help.
 
 ## LaunchDarkly overview
 
