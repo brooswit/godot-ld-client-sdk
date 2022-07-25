@@ -3,7 +3,7 @@
 
 extends Node
 
-const version = "0.0.5"
+const version = "0.0.6"
 
 const stream_path = "/meval/"
 
@@ -55,11 +55,7 @@ func variation(flagKey, fallbackValue):
 func _areUsersDifferent(userA, userB):
 	return !_deepEqual(userA, userB)
 
-###############################################################################
-#### Godot built-in methods
-###############################################################################
-
-func _process(delta):
+func _processFeatureRequestor(delta):
 	var port = 443
 	var use_ssl = true
 	var verify_host = false
@@ -142,6 +138,17 @@ func _process(delta):
 					self.emit_signal("feature_store_updated")
 				stream_event_name = null
 				stream_event_data = null
+
+func _processEventProcessor(delta):
+	return
+
+###############################################################################
+#### Godot built-in methods
+###############################################################################
+
+func _process(delta):
+	_processFeatureRequestor(delta)
+	_processEventProcessor(delta)
 
 func _ready():
 	print("LaunchDarkly Godot SDK " + version)
