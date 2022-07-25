@@ -3,7 +3,7 @@
 
 extends Node
 
-const version = "0.0.1"
+const version = "0.0.2"
 
 signal feature_store_updated
 
@@ -50,7 +50,7 @@ func variation(flagKey, fallbackValue):
 ###############################################################################
 
 func areUsersDifferent(userA, userB):
-	return !deepEqual(userA, userB)
+	return !_deepEqual(userA, userB)
 
 ###############################################################################
 #### Godot built-in methods
@@ -142,14 +142,14 @@ func _process(delta):
 				stream_event_data = null
 
 func _ready():
-	print("LaunchDarkly Godot SDK" + version)
+	print("LaunchDarkly Godot SDK " + version)
 
 ###############################################################################
 #### Util
 ###############################################################################
 
 func deepCopy(v):
-	if !isObject(v):
+	if !_isObject(v):
 		return v
 	
 	var newCopy = {}
@@ -158,19 +158,19 @@ func deepCopy(v):
 	
 	return newCopy
 
-func deepEqual(a, b):
+func _deepEqual(a, b):
 	# if the inputs are litterally equal, then the inputs are equal
 	if a == b:
 		return true
 	
 	# if the inputs are objects then continue, otherwise the values cannot be equal
-	if (!isObject(a) || !isObject(b)):
+	if (!_isObject(a) || !_isObject(b)):
 		return false
 	
 	# before comparing, make sure the objects aren't looping/self-referencing
-	if detectLoop(a):
+	if _detectLoop(a):
 		return false
-	if detectLoop(b):
+	if _detectLoop(b):
 		return false
 	
 	var keyMap = {}
@@ -180,14 +180,14 @@ func deepEqual(a, b):
 		keyMap[key] = true
 	
 	for key in keyMap:
-		if !deepEqual(a[key], b[key]):
+		if !_deepEqual(a[key], b[key]):
 			return false
 	
 	return true
 
-func detectLoop(v):
+func _detectLoop(v):
 	return false #TODO
 
-func isObject(v):
+func _isObject(v):
 	return typeof(v) == TYPE_DICTIONARY
 	# TODO ADD MORE TYPES
