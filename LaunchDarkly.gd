@@ -3,7 +3,7 @@
 
 extends Node
 
-const version = "0.0.2"
+const version = "0.0.3"
 
 signal feature_store_updated
 
@@ -18,7 +18,6 @@ var userObject = null
 
 var isConfigured = false
 var isIdentified = false
-var isReady = false
 var shouldRestartStream = false
 
 var httpclient = HTTPClient.new()
@@ -86,7 +85,6 @@ func _process(delta):
 	# restart stream if error or if should restart
 	if httpclient_error or shouldRestartStream:
 		shouldRestartStream = false
-		isReady = false
 		httpclient.close()
 		return
 	
