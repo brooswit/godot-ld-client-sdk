@@ -3,7 +3,7 @@
 
 extends Node
 
-const version = "0.0.7"
+const version = "0.0.8"
 
 const stream_path = "/meval/"
 
@@ -119,7 +119,6 @@ func _manageFeatureRequestorConnection():
 		return true
 	
 	# This should never occur.
-	
 	return false
 
 func _consumeFeatureRequestorStream():
@@ -159,16 +158,29 @@ func _parseFeatureEvents(body):
 	return featureEvents
 
 func _handleFeatureEvents(featureEvents):
+	var featureStoreUpdated = false
+	
 	if featureEvents:
 		for eventData in featureEvents:
 			var event = eventData.event
 			var data = eventData.data
 			if event == "put":
 				featureStore = data
-				self.emit_signal("feature_store_updated")
+				featureStoreUpdated = true
+			elif event == "patch":
+				var entry = _deepCopy(featureStore[data.key])
+				if entry == null:
+					entry = {}
+				for key in data:
+					if key != "key":
+						entry[key] = data[key]
+				featureStore[data.key] = entry
+				featureStoreUpdated = true
 			else:
 				print("unknown event: " + event + " with data " + JSON.print(data))
 				print("debug feature store: " + JSON.print(featureStore))
+		if featureStoreUpdated:
+			self.emit_signal("feature_store_updated")
 
 func _consumeFeatureEventsFromFeatureRequestorStream():
 	var body =_consumeFeatureRequestorStream()
