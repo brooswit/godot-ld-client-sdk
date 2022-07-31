@@ -3,7 +3,7 @@
 
 extends Node
 
-const version = "0.0.6"
+const version = "0.0.7"
 
 const stream_path = "/meval/"
 
@@ -55,7 +55,11 @@ func variation(flagKey, fallbackValue):
 func _areUsersDifferent(userA, userB):
 	return !_deepEqual(userA, userB)
 
-func _processFeatureRequestor(delta):
+###############################################################################
+#### Feature Requestor
+###############################################################################
+
+func _manageFeatureRequestorConnection():
 	var port = 443
 	var use_ssl = true
 	var verify_host = false
@@ -85,19 +89,19 @@ func _processFeatureRequestor(delta):
 	if httpclient_error or shouldRestartStream:
 		shouldRestartStream = false
 		httpclient.close()
-		return
+		return false
 	
 	if httpclient_status == HTTPClient.STATUS_DISCONNECTED:
 		if isConfigured:
 			var err = httpclient.connect_to_host(domain, port, use_ssl, verify_host)
 			if err != OK:
 				print("LDClient: Unable to open connection!")
-		return
+		return false
 	
 	if httpclient_status == HTTPClient.STATUS_RESOLVING:
-		return
+		return false
 	if httpclient_status == HTTPClient.STATUS_CONNECTING:
-		return
+		return false
 		
 	if httpclient_status == HTTPClient.STATUS_CONNECTED:
 		if isIdentified:
@@ -106,40 +110,83 @@ func _processFeatureRequestor(delta):
 			var err = httpclient.request(HTTPClient.METHOD_GET, url_after_domain + user_base64, additional_headers)
 			if err != OK:
 				print("LDClient: Unable to request!")
-			return
+			return false
 	
 	if httpclient_status == HTTPClient.STATUS_REQUESTING:
-		return
+		return false
 	
 	if httpclient_status == HTTPClient.STATUS_BODY || httpclient.has_response():
-		var chunk = httpclient.read_response_body_chunk()
-		if(chunk.size() == 0):
-			return
-		else:
-			response_body = response_body + chunk
-			
-		var body = response_body.get_string_from_utf8()
-		if body:
-			response_body.resize(0)
-			var lines = body.split("\n", false, 0)
-			for line in lines:
-				var args = line.split(":", false, 1)
-				if args.size() != 0:
-					if args[0] == "event":
-						stream_event_name = args[1]
-						# print("event received...")
-					if args[0] == "data":
-						stream_event_data = JSON.parse(args[1]).result
-						# print("event data received... " + args[1])
-			
-			if stream_event_name != null and stream_event_data != null:
-				if stream_event_name == "put":
-					featureStore = stream_event_data
-					self.emit_signal("feature_store_updated")
-				stream_event_name = null
-				stream_event_data = null
+		return true
+	
+	# This should never occur.
+	
+	return false
 
-func _processEventProcessor(delta):
+func _consumeFeatureRequestorStream():
+	var chunk = httpclient.read_response_body_chunk()
+	if(chunk.size() == 0):
+		return
+	else:
+		response_body = response_body + chunk
+	
+	var body = response_body.get_string_from_utf8()
+	if body:
+		response_body.resize(0)
+	return body
+
+func _parseFeatureEvents(body):
+	var featureEvents
+	if body:
+		featureEvents = []
+		response_body.resize(0)
+		var lines = body.split("\n", false, 0)
+		for line in lines:
+			var args = line.split(":", false, 1)
+			if args.size() != 0:
+				if args[0] == "event":
+					stream_event_name = args[1]
+					stream_event_data = null
+					# print("event received...")
+				if args[0] == "data":
+					stream_event_data = JSON.parse(args[1]).result
+					# print("event data received... " + args[1])
+					featureEvents = featureEvents + [{
+						"event": stream_event_name,
+						"data": stream_event_data
+					}]
+					stream_event_name = null
+					stream_event_data = null
+	return featureEvents
+
+func _handleFeatureEvents(featureEvents):
+	if featureEvents:
+		for eventData in featureEvents:
+			var event = eventData.event
+			var data = eventData.data
+			if event == "put":
+				featureStore = data
+				self.emit_signal("feature_store_updated")
+			else:
+				print("unknown event: " + event + " with data " + JSON.print(data))
+				print("debug feature store: " + JSON.print(featureStore))
+
+func _consumeFeatureEventsFromFeatureRequestorStream():
+	var body =_consumeFeatureRequestorStream()
+	var featureEvents = _parseFeatureEvents(body)
+	return featureEvents
+
+func _processFeatureRequestor(delta):
+	if !_manageFeatureRequestorConnection():
+		return false
+	var featureEvents = _consumeFeatureEventsFromFeatureRequestorStream()
+	if featureEvents:
+		_handleFeatureEvents(featureEvents)
+
+###############################################################################
+#### Analytic Event Processor
+###############################################################################
+
+func _processAnalyticEventProcessor(delta):
 	return
 
 ###############################################################################
@@ -148,7 +195,7 @@ func _processEventProcessor(delta):
 
 func _process(delta):
 	_processFeatureRequestor(delta)
-	_processEventProcessor(delta)
+	_processAnalyticEventProcessor(delta)
 
 func _ready():
 	print("LaunchDarkly Godot SDK " + version)
