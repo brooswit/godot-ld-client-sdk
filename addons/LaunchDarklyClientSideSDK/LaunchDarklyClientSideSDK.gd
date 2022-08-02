@@ -3,7 +3,7 @@
 
 extends Node
 
-const version = "0.0.8"
+const version = "0.0.9"
 
 const stream_path = "/meval/"
 
@@ -25,28 +25,81 @@ var response_body = PoolByteArray()
 var stream_event_name = null
 var stream_event_data = null
 
+var now = OS.get_ticks_msec()
+
+## CONFIG OPTIONS
+var sendEvents = true
+var inlineUsers = false
+
 ###############################################################################
 #### LD public methods
 ###############################################################################
 
-func configure(newMobileKey):
+func configure(newMobileKey, options):
 	if mobileKey == newMobileKey:
 		return
+	
+	# PARSE OPTIONS
+	if options.has("sendEvents"):
+		sendEvents = options.sendEvents
+	if options.has("inlineUsers"):
+		inlineUsers = options.inlineUsers
+	
+	# SETUP THE REST
 	mobileKey = newMobileKey
 	isConfigured = true
 	shouldRestartStream = true
 
 func identify(newUserObject):
+	newUserObject.key = str(newUserObject.key)
 	if !_areUsersDifferent(userObject, newUserObject):
 		return
 	userObject = _deepCopy(newUserObject)
+	
 	isIdentified = true
 	shouldRestartStream = true
+	
+	_enqueueAnalyticEvent({
+		"kind": "identify",
+		"key": userObject.key,
+		"user": userObject,
+		"creationDate": now,
+	})
+	
 
 func variation(flagKey, fallbackValue):
-	if !featureStore.has(flagKey):
-		return fallbackValue
-	return featureStore[flagKey].value
+	var default = fallbackValue
+	var flag = null
+	var variation = null
+	var value = default
+
+	if featureStore.has(flagKey):
+		flag = featureStore[flagKey]
+		value = flag.value
+		variation = flag.variation
+	
+	var event = {
+		"kind": "feature",
+		"key": flagKey,
+		"user": userObject,
+		"value": value,
+		"variation": variation,
+		"default": default,
+		"creationDate": now
+	}
+	if userObject and userObject.has("anonymous"):
+		event.contextKind = _userContextKind(userObject);
+	if flag:
+		event.version = flag.flagVersion or flag.version
+		event.trackEvents = flag.trackEvents
+		if flag.has("debugEventsUntilDate"):
+			event.debugEventsUntilDate = flag.debugEventsUntilDate
+	# if (includeReasons or (flag and flag.trackReasons)) and detail:
+	# 	event.reason = detail.reason
+	
+	_enqueueAnalyticEvent(event)
+
+	return value
 
 ###############################################################################
 #### LD private methods
@@ -54,6 +107,12 @@ func variation(flagKey, fallbackValue):
 
 func _areUsersDifferent(userA, userB):
 	return !_deepEqual(userA, userB)
+
+func _userContextKind(user):
+	if user.anonymous:
+		return "anonymousUser"
+	else:
+		return "user"
 
 ###############################################################################
 #### Feature Requestor
@@ -198,14 +257,138 @@ func _processFeatureRequestor(delta):
 #### Analytic Event Processor
 ###############################################################################
 
+var lastFlush = OS.get_ticks_msec()
+var eventQueue = []
+var summarizationCounters = {}
+var summarizationStartDate = 0
+var summarizationEndDate = 0
+
+func _summarizeEvent(event):
+	if event.kind == "feature":
+		var counterKey = str(event.key) + ":" + str(event.variation) + ":" + str(event.version)
+		if summarizationCounters.has(counterKey):
+			summarizationCounters[counterKey].count += 1
+		else:
+			summarizationCounters[counterKey] = {
+				"count": 1,
+				"key": event.key,
+				"variation": event.variation,
+				"version": event.version,
+				"value": event.value,
+				"default": event.default
+			}
+		if summarizationStartDate == 0 || event.creationDate < summarizationStartDate:
+			summarizationStartDate = event.creationDate
+		if event.creationDate > summarizationEndDate:
+			summarizationEndDate = event.creationDate
+
+func _getSummary():
+	var flagsOut = {}
+	var empty = true
+	for index in summarizationCounters:
+		var counter = summarizationCounters[index]
+		var flag
+		if flagsOut.has(counter.key):
+			flag = flagsOut[counter.key]
+		else:
+			flag = {
+				"default": counter.default,
+				"counters": []
+			}
+		flagsOut[counter.key] = flag
+		var counterOut = {
+			"value": counter.value,
+			"count": counter.count
+		}
+		if counter.has("variation") && counter.variation != null:
+			counterOut.variation = counter.variation
+		if counter.version:
+			counterOut.version = counter.version
+		else:
+			counterOut.unknown = true
+		flag.counters = flag.counters + [counterOut]
+		empty = false
+		if empty:
+			return null
+		return {
+			"startDate": summarizationStartDate,
+			"endDate": summarizationEndDate,
+			"features": flagsOut,
+		}
+
+func _makeOutputEvent(event):
+	event = _deepCopy(event)
+	if event.type == "alias":
+		return event
+	if !inlineUsers and event.kind != 'identify':
+		event.userKey = event.user.key
+		event.erase("user")
+	if event.kind == "feature":
+		event.erase("trackEvents")
+		event.erase("debugEventsUntilDate")
+	return event
+
+func _shouldDebugAnalyticEvent(event):
+	if event.has("debugEventsUntilDate"):
+		return event.debugEventsUntilDate > now
+
+func _clearSummary():
+	summarizationStartDate = 0;
+	summarizationEndDate = 0;
+	summarizationCounters = {};
+
+func _flush():
+	if !sendEvents:
+		return
+	
+	var eventsToSend = eventQueue
+	var summary = _getSummary()
+	_clearSummary()
+	if summary:
+		summary.kind = "summary"
+		eventsToSend = eventsToSend + [summary]
+	if eventsToSend.size() == 0:
+		return
+	eventQueue = []
+	# send the events
+	print(JSON.print(eventsToSend))
+
+func _enqueueAnalyticEvent(event):
+	var addFullEvent = false
+	var addDebugEvent = false
+	
+	_summarizeEvent(event)
+	
+	if event.kind == 'feature':
+		addFullEvent = event.trackEvents == true
+		addDebugEvent = _shouldDebugAnalyticEvent(event)
+	
+	if addFullEvent:
+		eventQueue = [_makeOutputEvent(event)] + eventQueue
+	
+	if addDebugEvent:
+		var debugEvent = _deepCopy(event)
+		debugEvent.kind = "debug"
+		debugEvent.erase("trackEvents")
+		debugEvent.erase("debugEventsUntilDate")
+		eventQueue = [debugEvent] + eventQueue
+
 func _processAnalyticEventProcessor(delta):
-	return
+	if sendEvents == false:
+		return
+	
+	if now < lastFlush + 5000:
+		return
+	lastFlush = now
+	_flush()
 
 ###############################################################################
 #### Godot built-in methods
 ###############################################################################
 
 func _process(delta):
+	now = OS.get_ticks_msec()
+
 	_processFeatureRequestor(delta)
 	_processAnalyticEventProcessor(delta)
 
