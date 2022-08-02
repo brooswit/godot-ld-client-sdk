@@ -1,51 +1,45 @@
-# This node is intended to be autoloaded as a singleton
-# https://docs.godotengine.org/en/stable/tutorials/scripting/singletons_autoload.html
-
 extends Node
 
-const version = "0.0.9"
-
+const version = "0.0.10"
 const stream_path = "/meval/"
 
 signal feature_store_updated
 
-var featureStore = {}
-
-var stream_uri = "clientstream.launchdarkly.com"
-
-var mobileKey = null
-var userObject = null
-
+# STATE FLAGS
 var isConfigured = false
 var isIdentified = false
 var shouldRestartStream = false
 
+# STATE VARIABLES
+var now = OS.get_system_time_msecs ()
+var featureStore = {}
+var mobileKey = null
+var userObject = null
+
+# STREAMING CONNECTION
 var httpclient = HTTPClient.new()
 var response_body = PoolByteArray()
 var stream_event_name = null
 var stream_event_data = null
 
-var now = OS.get_ticks_msec()
-
 ## CONFIG OPTIONS
 var sendEvents = true
 var inlineUsers = false
+var stream_uri = "clientstream.launchdarkly.com"
 
 ###############################################################################
-#### LD public methods
+#### LD SDK public methods
 ###############################################################################
 
 func configure(newMobileKey, options):
 	if mobileKey == newMobileKey:
 		return
 	
-	# PARSE OPTIONS
 	if options.has("sendEvents"):
 		sendEvents = options.sendEvents
 	if options.has("inlineUsers"):
 		inlineUsers = options.inlineUsers
 	
-	# SETUP THE REST
 	mobileKey = newMobileKey
 	isConfigured = true
 	shouldRestartStream = true
@@ -116,6 +110,7 @@ func _userContextKind(user):
 
 ###############################################################################
 #### Feature Requestor
+#### Designed to use iOS/Android SDK's flag delivery architecture
 ###############################################################################
 
 func _manageFeatureRequestorConnection():
@@ -235,9 +230,9 @@ func _handleFeatureEvents(featureEvents):
 						entry[key] = data[key]
 				featureStore[data.key] = entry
 				featureStoreUpdated = true
-			else:
-				print("unknown event: " + event + " with data " + JSON.print(data))
-				print("debug feature store: " + JSON.print(featureStore))
+			# else:
+				# print("unknown event: " + event + " with data " + JSON.print(data))
+				# print("debug feature store: " + JSON.print(featureStore))
 		if featureStoreUpdated:
 			self.emit_signal("feature_store_updated")
 
@@ -246,7 +241,7 @@ func _consumeFeatureEventsFromFeatureRequestorStream():
 	var featureEvents = _parseFeatureEvents(body)
 	return featureEvents
 
-func _processFeatureRequestor(delta):
+func _processFeatureRequestor():
 	if !_manageFeatureRequestorConnection():
 		return false
 	var featureEvents = _consumeFeatureEventsFromFeatureRequestorStream()
@@ -255,9 +250,10 @@ func _processFeatureRequestor(delta):
 
 ###############################################################################
 #### Analytic Event Processor
+#### Mostly ported from JS client-side SDK
 ###############################################################################
 
-var lastFlush = OS.get_ticks_msec()
+var lastFlush = now
 var eventQueue = []
 var summarizationCounters = {}
 var summarizationStartDate = 0
@@ -308,17 +304,17 @@ func _getSummary():
 			counterOut.unknown = true
 		flag.counters = flag.counters + [counterOut]
 		empty = false
-		if empty:
-			return null
-		return {
-			"startDate": summarizationStartDate,
-			"endDate": summarizationEndDate,
-			"features": flagsOut,
-		}
+	if empty:
+		return null
+	return {
+		"startDate": summarizationStartDate,
+		"endDate": summarizationEndDate,
+		"features": flagsOut,
+	}
 
 func _makeOutputEvent(event):
 	event = _deepCopy(event)
-	if event.type == "alias":
+	if event.kind == "alias":
 		return event
 	if !inlineUsers and event.kind != 'identify':
 		event.userKey = event.user.key
@@ -341,7 +337,8 @@ func _flush():
 	if !sendEvents:
 		return
 	
-	var eventsToSend = eventQueue
+	var eventsToSend = _deepCopy(eventQueue)
+	eventQueue = []
 	var summary = _getSummary()
 	_clearSummary()
 	if summary:
@@ -349,12 +346,11 @@ func _flush():
 		eventsToSend = eventsToSend + [summary]
 	if eventsToSend.size() == 0:
 		return
-	eventQueue = []
-	# send the events
+	# TODO send the events
 	print(JSON.print(eventsToSend))
 
 func _enqueueAnalyticEvent(event):
-	var addFullEvent = false
+	var addFullEvent = true
 	var addDebugEvent = false
 	
 	_summarizeEvent(event)
@@ -364,16 +360,16 @@ func _enqueueAnalyticEvent(event):
 		addDebugEvent = _shouldDebugAnalyticEvent(event)
 	
 	if addFullEvent:
-		eventQueue = [_makeOutputEvent(event)] + eventQueue
+		eventQueue = eventQueue + [_makeOutputEvent(event)]
 	
 	if addDebugEvent:
 		var debugEvent = _deepCopy(event)
 		debugEvent.kind = "debug"
 		debugEvent.erase("trackEvents")
 		debugEvent.erase("debugEventsUntilDate")
-		eventQueue = [debugEvent] + eventQueue
+		eventQueue = eventQueue + [debugEvent] 
 
-func _processAnalyticEventProcessor(delta):
+func _processAnalyticEventProcessor():
 	if sendEvents == false:
 		return
 	
@@ -387,10 +383,9 @@ func _processAnalyticEventProcessor(delta):
 ###############################################################################
 
 func _process(delta):
-	now = OS.get_ticks_msec()
-
-	_processFeatureRequestor(delta)
-	_processAnalyticEventProcessor(delta)
+	now = OS.get_system_time_msecs ()
+	_processFeatureRequestor()
+	_processAnalyticEventProcessor()
 
 func _ready():
 	print("LaunchDarkly Godot SDK " + version)
