@@ -1,6 +1,6 @@
 extends Node
 
-const version = "0.0.10"
+const version = "0.0.11"
 const stream_path = "/meval/"
 
 signal feature_store_updated
@@ -9,9 +9,10 @@ signal feature_store_updated
 var isConfigured = false
 var isIdentified = false
 var shouldRestartStream = false
+var shouldFlush = false
 
 # STATE VARIABLES
-var now = OS.get_system_time_msecs ()
+var now = OS.get_system_time_msecs()
 var featureStore = {}
 var mobileKey = null
 var userObject = null
@@ -94,6 +95,9 @@ func variation(flagKey, fallbackValue):
 	_enqueueAnalyticEvent(event)
 
 	return value
+
+func flush():
+	shouldFlush = true
 
 ###############################################################################
 #### LD private methods
@@ -373,8 +377,10 @@ func _processAnalyticEventProcessor():
 	if sendEvents == false:
 		return
 	
-	if now < lastFlush + 5000:
+	if now < lastFlush + 5000 and !shouldFlush:
 		return
+	
+	shouldFlush = false
 	lastFlush = now
 	_flush()
 
@@ -383,7 +389,7 @@ func _processAnalyticEventProcessor():
 ###############################################################################
 
 func _process(delta):
-	now = OS.get_system_time_msecs ()
+	now = OS.get_system_time_msecs()
 	_processFeatureRequestor()
 	_processAnalyticEventProcessor()
 
