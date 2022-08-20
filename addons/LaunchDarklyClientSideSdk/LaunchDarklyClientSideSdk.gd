@@ -1,12 +1,15 @@
 extends Node
 
-const version = "0.0.12"
+const version = "0.0.13"
 const stream_path = "/meval/"
-const event_path = "/mobile"
 
 signal feature_store_updated
 
 # STATE FLAGS
+var isConfigured = false
+var isIdentified = false
+var shouldRestartStream = false
+var shouldFlush = false
 
 # STATE VARIABLES
 var now = OS.get_system_time_msecs()
@@ -14,29 +17,16 @@ var featureStore = {}
 var mobileKey = null
 var userObject = null
 
-# FEATURE REQUESTOR
-var stream_httpclient = HTTPClient.new()
+# STREAMING CONNECTION
+var httpclient = HTTPClient.new()
 var response_body = PoolByteArray()
 var stream_event_name = null
 var stream_event_data = null
-
-# FEATURE REQUESTOR STATE FLAGS
-var isConfigured = false
-var isIdentified = false
-var shouldRestartStream = false
-
-# EVENT PROCESSOR
-var event_httpclient = HTTPClient.new()
-
-# EVENT PROCESSOR STATE FLAGS
-var shouldFlush = false
-var eventFlusherPayloads = []
 
 ## CONFIG OPTIONS
 var sendEvents = true
 var inlineUsers = false
 var stream_uri = "clientstream.launchdarkly.com"
-var event_uri = "mobile.launchdarkly.com"
 
 ###############################################################################
 #### LD SDK public methods
@@ -95,7 +85,7 @@ func variation(flagKey, fallbackValue):
 	if userObject and userObject.has("anonymous"):
 		event.contextKind = _userContextKind(userObject);
 	if flag:
-		event.version = flag.version
+		event.version = flag.flagVersion or flag.version
 		event.trackEvents = flag.trackEvents
 		if flag.has("debugEventsUntilDate"):
 			event.debugEventsUntilDate = flag.debugEventsUntilDate
@@ -135,62 +125,62 @@ func _manageFeatureRequestorConnection():
 	var domain = stream_uri
 	var url_after_domain = stream_path
 	
-	stream_httpclient.poll()
-	var stream_httpclient_status = stream_httpclient.get_status()
+	httpclient.poll()
+	var httpclient_status = httpclient.get_status()
 	
 	# Handle errors first
-	var stream_httpclient_error = false
-	if stream_httpclient_status == HTTPClient.STATUS_CANT_RESOLVE:
+	var httpclient_error = false
+	if httpclient_status == HTTPClient.STATUS_CANT_RESOLVE:
 		print("LDClient: ...Cannot resolve host!")
-		stream_httpclient_error = true
-	elif stream_httpclient_status == HTTPClient.STATUS_CONNECTION_ERROR:
+		httpclient_error = true
+	elif httpclient_status == HTTPClient.STATUS_CONNECTION_ERROR:
 		print("LDClient: ...Connection error occurred!")
-		stream_httpclient_error = true
-	elif stream_httpclient_status == HTTPClient.STATUS_SSL_HANDSHAKE_ERROR:
+		httpclient_error = true
+	elif httpclient_status == HTTPClient.STATUS_SSL_HANDSHAKE_ERROR:
 		print("LDClient: ...SSL handshake error!")
-		stream_httpclient_error = true
-	elif stream_httpclient_status == HTTPClient.STATUS_CANT_CONNECT:
+		httpclient_error = true
+	elif httpclient_status == HTTPClient.STATUS_CANT_CONNECT:
 		print("LDClient: ...Cannot connect to host!")
-		stream_httpclient_error = true
+		httpclient_error = true
 	
 	# restart stream if error or if should restart
-	if stream_httpclient_error or shouldRestartStream:
+	if httpclient_error or shouldRestartStream:
 		shouldRestartStream = false
-		stream_httpclient.close()
+		httpclient.close()
 		return false
 	
-	if stream_httpclient_status == HTTPClient.STATUS_DISCONNECTED:
+	if httpclient_status == HTTPClient.STATUS_DISCONNECTED:
 		if isConfigured:
-			var err = stream_httpclient.connect_to_host(domain, port, use_ssl, verify_host)
+			var err = httpclient.connect_to_host(domain, port, use_ssl, verify_host)
 			if err != OK:
 				print("LDClient: Unable to open connection!")
 		return false
 	
-	if stream_httpclient_status == HTTPClient.STATUS_RESOLVING:
+	if httpclient_status == HTTPClient.STATUS_RESOLVING:
 		return false
-	if stream_httpclient_status == HTTPClient.STATUS_CONNECTING:
+	if httpclient_status == HTTPClient.STATUS_CONNECTING:
 		return false
 		
-	if stream_httpclient_status == HTTPClient.STATUS_CONNECTED:
+	if httpclient_status == HTTPClient.STATUS_CONNECTED:
 		if isIdentified:
 			var user_base64 = Marshalls.utf8_to_base64( JSON.print(userObject) )
 			var additional_headers = ["Authorization: " + mobileKey]
-			var err = stream_httpclient.request(HTTPClient.METHOD_GET, url_after_domain + user_base64, additional_headers)
+			var err = httpclient.request(HTTPClient.METHOD_GET, url_after_domain + user_base64, additional_headers)
 			if err != OK:
 				print("LDClient: Unable to request!")
 			return false
 	
-	if stream_httpclient_status == HTTPClient.STATUS_REQUESTING:
+	if httpclient_status == HTTPClient.STATUS_REQUESTING:
 		return false
 	
-	if stream_httpclient_status == HTTPClient.STATUS_BODY || stream_httpclient.has_response():
+	if httpclient_status == HTTPClient.STATUS_BODY || httpclient.has_response():
 		return true
 	
 	# This should never occur.
 	return false
 
 func _consumeFeatureRequestorStream():
-	var chunk = stream_httpclient.read_response_body_chunk()
+	var chunk = httpclient.read_response_body_chunk()
 	if(chunk.size() == 0):
 		return
 	else:
@@ -275,7 +265,9 @@ var summarizationEndDate = 0
 
 func _summarizeEvent(event):
 	if event.kind == "feature":
-		var counterKey = str(event.key) + ":" + str(event.variation) + ":" + str(event.version)
+		var counterKey = str(event.key) + ":" + str(event.variation)
+		if event.has("version"):
+			counterKey = counterKey + ":" + str(event.version)
 		if summarizationCounters.has(counterKey):
 			summarizationCounters[counterKey].count += 1
 		else:
@@ -283,10 +275,11 @@ func _summarizeEvent(event):
 				"count": 1,
 				"key": event.key,
 				"variation": event.variation,
-				"version": event.version,
 				"value": event.value,
 				"default": event.default
 			}
+			if (event.has("version")):
+				summarizationCounters[counterKey].version = event.version
 		if summarizationStartDate == 0 || event.creationDate < summarizationStartDate:
 			summarizationStartDate = event.creationDate
 		if event.creationDate > summarizationEndDate:
@@ -352,6 +345,7 @@ func _flush():
 		return
 	
 	var eventsToSend = _deepCopy(eventQueue)
+	eventQueue = []
 	var summary = _getSummary()
 	_clearSummary()
 	if summary:
@@ -360,8 +354,7 @@ func _flush():
 	if eventsToSend.size() == 0:
 		return
 	# TODO send the events
-	eventFlusherPayloads = eventFlusherPayloads + [JSON.print(eventsToSend)]
-	eventQueue = []
+	print(JSON.print(eventsToSend))
 
 func _enqueueAnalyticEvent(event):
 	var addFullEvent = true
@@ -370,7 +363,8 @@ func _enqueueAnalyticEvent(event):
 	_summarizeEvent(event)
 	
 	if event.kind == 'feature':
-		addFullEvent = event.trackEvents == true
+		if event.has("trackEvents"):
+			addFullEvent = event.trackEvents == true
 		addDebugEvent = _shouldDebugAnalyticEvent(event)
 	
 	if addFullEvent:
@@ -381,87 +375,18 @@ func _enqueueAnalyticEvent(event):
 		debugEvent.kind = "debug"
 		debugEvent.erase("trackEvents")
 		debugEvent.erase("debugEventsUntilDate")
-		eventQueue = eventQueue + [debugEvent]
-
-func _manageEventFlusherConnection():
-	var port = 443
-	var use_ssl = true
-	var verify_host = false
-
-	var domain = event_uri
-	var url_after_domain = event_path
-	
-	event_httpclient.poll()
-	var event_httpclient_status = event_httpclient.get_status()
-	
-	if event_httpclient_status == HTTPClient.STATUS_DISCONNECTED:
-		if eventFlusherPayloads.size() > 0:
-			var err = event_httpclient.connect_to_host(domain, port, use_ssl, verify_host)
-			if err != OK:
-				print("LDClient: EventFlusher: Unable to open connection!")
-		return false
-	
-	# Handle errors first
-	var event_httpclient_error = false
-	if event_httpclient_status == HTTPClient.STATUS_CANT_RESOLVE:
-		print("LDClient: EventFlusher: ...Cannot resolve host!")
-		event_httpclient_error = true
-	elif event_httpclient_status == HTTPClient.STATUS_CONNECTION_ERROR:
-		print("LDClient: EventFlusher: ...Connection error occurred!")
-		event_httpclient_error = true
-	elif event_httpclient_status == HTTPClient.STATUS_SSL_HANDSHAKE_ERROR:
-		print("LDClient: EventFlusher: ...SSL handshake error!")
-		event_httpclient_error = true
-	elif event_httpclient_status == HTTPClient.STATUS_CANT_CONNECT:
-		print("LDClient: EventFlusher: ...Cannot connect to host!")
-		event_httpclient_error = true
-	
-	# restart event if error or if should restart
-	if event_httpclient_error:
-		event_httpclient.close()
-		return false
-	
-	var event_httpclient_connecting = false
-	if event_httpclient_status == HTTPClient.STATUS_RESOLVING:
-		event_httpclient_connecting = true
-	if event_httpclient_status == HTTPClient.STATUS_CONNECTING:
-		event_httpclient_connecting = true
-	
-	if event_httpclient_connecting == true:
-		return false
-		
-	if event_httpclient_status == HTTPClient.STATUS_CONNECTED:
-		var body = eventFlusherPayloads[0]
-		var additional_headers = ["Authorization: " + mobileKey, "Content-Type: application/json", "Content-Length: " + str(body.length())]
-		var err = event_httpclient.request(HTTPClient.METHOD_POST, url_after_domain, additional_headers, body)
-		if err != OK:
-			print("LDClient: EventFlusher: Unable to request!")
-		return false
-	
-	if event_httpclient_status == HTTPClient.STATUS_REQUESTING:
-		return false
-	
-	if event_httpclient_status == HTTPClient.STATUS_BODY || event_httpclient.has_response():
-		# print(event_httpclient.get_response_code())
-		# print(JSON.print(event_httpclient.get_response_headers()))
-		# print(eventFlusherPayloads[0])
-		eventFlusherPayloads.remove(0)
-		event_httpclient.close()
-		return true
-	
-	# This should never occur.
-	return false
+		eventQueue = eventQueue + [debugEvent] 
 
 func _processAnalyticEventProcessor():
 	if sendEvents == false:
 		return
 	
-	if now > lastFlush + 5000 or shouldFlush:
-		shouldFlush = false
-		lastFlush = now
-		_flush()
+	if now < lastFlush + 5000 and !shouldFlush:
+		return
 	
-	_manageEventFlusherConnection()
+	shouldFlush = false
+	lastFlush = now
+	_flush()
 
 ###############################################################################
 #### Godot built-in methods
